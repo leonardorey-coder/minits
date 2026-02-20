@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary-base: #6366f1;
+  --color-primary-dark: #4f46e5;
+  --color-primary-light: #818cf8;
+}
+
+@layer utilities {
+  .clay-panel {
+    @apply border border-white/5;
+    background: #27272a; /* zinc-800 */
+    box-shadow: 
+      15px 15px 30px rgba(0,0,0,0.3),
+      -10px -10px 20px rgba(255,255,255,0.02),
+      inset -6px -6px 12px rgba(0,0,0,0.4),
+      inset 6px 6px 12px rgba(255,255,255,0.05);
+  }
+
+  .clay-btn {
+    @apply border border-white/5 transition-all duration-300;
+    background: #27272a;
+    box-shadow: 
+      8px 8px 16px rgba(0,0,0,0.25),
+      -4px -4px 10px rgba(255,255,255,0.03),
+      inset -3px -3px 8px rgba(0,0,0,0.3),
+      inset 3px 3px 8px rgba(255,255,255,0.06);
+  }
+
+  .clay-btn:hover {
+    box-shadow: 
+      10px 10px 20px rgba(0,0,0,0.3),
+      -6px -6px 12px rgba(255,255,255,0.04),
+      inset -3px -3px 8px rgba(0,0,0,0.3),
+      inset 3px 3px 8px rgba(255,255,255,0.06);
+    transform: translateY(-2px);
+  }
+
+  .clay-btn:active {
+    box-shadow: 
+      inset 8px 8px 16px rgba(0,0,0,0.4),
+      inset -6px -6px 12px rgba(255,255,255,0.03);
+    transform: translateY(1px);
+  }
+
+  .clay-btn-primary {
+    @apply text-white border-transparent font-medium;
+    background: var(--color-primary-base);
+    box-shadow: 
+      8px 8px 16px rgba(0,0,0,0.25),
+      inset -4px -4px 10px var(--color-primary-dark),
+      inset 4px 4px 10px var(--color-primary-light);
+  }
+
+  .clay-btn-primary:hover {
+    box-shadow: 
+      12px 12px 20px rgba(99,102,241,0.3),
+      inset -4px -4px 10px var(--color-primary-dark),
+      inset 4px 4px 10px var(--color-primary-light);
+    transform: translateY(-2px);
+  }
+  
+  .clay-btn-primary:active {
+    box-shadow: 
+      inset 6px 6px 15px var(--color-primary-dark),
+      inset -2px -2px 6px var(--color-primary-light);
+    transform: translateY(1px);
+  }
+
+  .clay-input {
+    @apply text-zinc-100 border border-black/20 focus:outline-none focus:ring-2 focus:ring-primary-base/50 transition-all;
+    background: #1f1f22;
+    box-shadow: 
+      inset 6px 6px 12px rgba(0,0,0,0.4),
+      inset -4px -4px 10px rgba(255,255,255,0.02);
+  }
+}
+
+body {
+  @apply bg-[#27272a] text-zinc-200 antialiased min-h-screen selection:bg-primary-base/40 selection:text-white;
+  margin: 0;
+}
+
+/* Custom scrollbar for dark clay look */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #1f1f22; 
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #3f3f46; 
+  border-radius: 10px;
+  border: 2px solid #1f1f22;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #52525b; 
+}
