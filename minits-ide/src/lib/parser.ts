@@ -13,6 +13,7 @@ export interface VarDecl {
     type: 'VarDecl';
     identifier: string;
     varType: string;
+    value?: Expression;
     line: number;
     column: number;
 }
@@ -241,14 +242,18 @@ export function parse(tokens: Token[]): { ast: Program | null; errors: Compilati
             throw new ParserError(`Tipo de variable desconocido '${varTypeToken.value}'`, varTypeToken);
         }
 
+        let valueExpr: Expression | undefined;
         if (matchValue(TokenType.Operator, '=')) {
-            parseExpression();
+            valueExpr = parseExpression();
         }
-        expectValue(TokenType.Punctuation, ';');
+        if (!matchValue(TokenType.Punctuation, ';')) {
+            throw new ParserError(`Falta punto y coma ';' al final de la declaración`, previous());
+        }
         return {
             type: 'VarDecl',
             identifier: idToken.value,
             varType: varTypeToken.value,
+            value: valueExpr,
             line: letToken.line,
             column: letToken.column
         };
@@ -332,7 +337,9 @@ export function parse(tokens: Token[]): { ast: Program | null; errors: Compilati
         expectValue(TokenType.Punctuation, '(');
         const value = parseExpression();
         expectValue(TokenType.Punctuation, ')');
-        expectValue(TokenType.Punctuation, ';');
+        if (!matchValue(TokenType.Punctuation, ';')) {
+            throw new ParserError(`Falta punto y coma ';' al final de 'print'`, previous());
+        }
         return { type: 'Print', value };
     }
 
@@ -341,7 +348,9 @@ export function parse(tokens: Token[]): { ast: Program | null; errors: Compilati
         expectValue(TokenType.Punctuation, '(');
         const idToken = expectType(TokenType.Identifier);
         expectValue(TokenType.Punctuation, ')');
-        expectValue(TokenType.Punctuation, ';');
+        if (!matchValue(TokenType.Punctuation, ';')) {
+            throw new ParserError(`Falta punto y coma ';' al final de 'read'`, previous());
+        }
         return {
             type: 'Read',
             identifier: idToken.value,
@@ -357,6 +366,8 @@ export function parse(tokens: Token[]): { ast: Program | null; errors: Compilati
 
         if (peek().value === ';') {
             expectValue(TokenType.Punctuation, ';');
+        } else {
+            throw new ParserError(`Falta punto y coma ';' al final de la asignación`, previous());
         }
         return {
             type: 'Assignment',
@@ -406,12 +417,15 @@ export function parse(tokens: Token[]): { ast: Program | null; errors: Compilati
             expectValue(TokenType.Punctuation, ':');
             const varTypeToken = expectType(TokenType.Keyword);
             expectValue(TokenType.Operator, '=');
-            parseExpression();
-            expectValue(TokenType.Punctuation, ';');
+            const valueExpr = parseExpression();
+            if (!matchValue(TokenType.Punctuation, ';')) {
+                throw new ParserError(`Falta punto y coma ';' en la inicialización del bucle 'for'`, previous());
+            }
             init = {
                 type: 'VarDecl',
                 identifier: idToken.value,
                 varType: varTypeToken.value,
+                value: valueExpr,
                 line: letToken.line,
                 column: letToken.column
             };

@@ -85,21 +85,28 @@ export function tokenize(sourceCode: string): { tokens: Token[], errors: Compila
             const quoteType = char;
             let value = '';
             const startCol = column;
+            const startLine = line;
             current++;
             column++;
 
-            while (current < sourceCode.length && sourceCode[current] !== quoteType) {
+            while (current < sourceCode.length && sourceCode[current] !== quoteType && sourceCode[current] !== '\n') {
                 value += sourceCode[current];
                 current++;
                 column++;
             }
 
-            if (sourceCode[current] === quoteType) {
+            if (current >= sourceCode.length || sourceCode[current] === '\n') {
+                errors.push({
+                    message: "Cadena de texto sin cerrar",
+                    line: startLine,
+                    column: startCol,
+                    source: 'lexer'
+                });
+            } else {
                 current++; // skip closing quote
                 column++;
+                tokens.push({ type: TokenType.StringLiteral, value, line: startLine, column: startCol });
             }
-
-            tokens.push({ type: TokenType.StringLiteral, value, line, column: startCol });
             continue;
         }
 
@@ -107,12 +114,23 @@ export function tokenize(sourceCode: string): { tokens: Token[], errors: Compila
         if (/[0-9]/.test(char)) {
             let value = '';
             const startCol = column;
+            let dotCount = 0;
+            let isValid = true;
             while (current < sourceCode.length && /[0-9.]/.test(sourceCode[current])) {
+                if (sourceCode[current] === '.') {
+                    dotCount++;
+                    if (dotCount > 1) isValid = false;
+                }
                 value += sourceCode[current];
                 current++;
                 column++;
             }
-            tokens.push({ type: TokenType.NumberLiteral, value, line, column: startCol });
+            
+            if (!isValid) {
+                errors.push({ message: `Número inválido: '${value}'`, line, column: startCol, source: 'lexer' });
+            } else {
+                tokens.push({ type: TokenType.NumberLiteral, value, line, column: startCol });
+            }
             continue;
         }
 

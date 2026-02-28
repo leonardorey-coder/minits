@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react';
 import { Play, Upload, Code2, Terminal, Type } from 'lucide-react';
 import { tokenize, type Token } from './lib/lexer';
-import { parse } from './lib/parser';
-import { analyze } from './lib/analyzer';
+import { parse, type Program } from './lib/parser';
+import { analyze, type SymbolInfo } from './lib/analyzer';
 import { compileToJavaScript } from './lib/compiler';
 import type { CompilationError } from './lib/errors';
 // To avoid TS warnings on AsyncFunction
@@ -25,10 +25,12 @@ main {
 }
 program fin
 `);
-  const [output, setOutput] = useState<string>('MiniTS Compiler ready. Press "Compile & Run" to execute code.');
-  const [generatedJS, setGeneratedJS] = useState<string>('// Target JS will appear here');
+  const [output, setOutput] = useState<string>('Compilador MiniTS listo. Presiona "Compilar y Ejecutar" para ejecutar el código.');
+  const [generatedJS, setGeneratedJS] = useState<string>('// El JS compilado aparecerá aquí');
   const [tokensList, setTokensList] = useState<Token[]>([]);
-  const [activeTab, setActiveTab] = useState<'js' | 'lexer'>('js');
+  const [astData, setAstData] = useState<Program | null>(null);
+  const [symbolTable, setSymbolTable] = useState<SymbolInfo[]>([]);
+  const [activeTab, setActiveTab] = useState<'js' | 'lexer' | 'syntax' | 'semantic'>('js');
 
   // Interactive console state
   const [isAwaitingInput, setIsAwaitingInput] = useState(false);
@@ -52,7 +54,7 @@ program fin
 
     setIsRunning(true);
     setOutput('');
-    setGeneratedJS('// Compiling...');
+    setGeneratedJS('// Compilando...');
     setTokensList([]);
 
     try {
@@ -64,16 +66,20 @@ program fin
       // 2. Syntactic Analysis & AST creation
       const parseResult = parse(lexResult.tokens);
       allErrors = allErrors.concat(parseResult.errors);
+      setAstData(parseResult.ast);
 
       // 3. Semantic Analysis (Linting)
       if (parseResult.ast) {
-        const semanticErrors = analyze(parseResult.ast);
-        allErrors = allErrors.concat(semanticErrors);
+        const semanticResult = analyze(parseResult.ast);
+        allErrors = allErrors.concat(semanticResult.errors);
+        setSymbolTable(semanticResult.symbols);
+      } else {
+        setSymbolTable([]);
       }
 
       // 4. Compilation halting
       if (allErrors.length > 0) {
-        setGeneratedJS('// Compilation halted due to errors.');
+        setGeneratedJS('// Compilación detenida por errores.');
         const errorStrings = allErrors.map((e) =>
           `[${e.source?.toUpperCase() || 'ERROR'} ERROR] Línea ${e.line}, Columna ${e.column}: ${e.message}`
         );
@@ -93,7 +99,7 @@ program fin
         },
         read: async (varName: string) => {
           setIsAwaitingInput(true);
-          setInputPrompt(`Enter value for ${varName}: `);
+          setInputPrompt(`Ingresa el valor para ${varName}: `);
           return new Promise<string>((resolve, reject) => {
             resolveInputRef.current = (value: string | null) => {
               if (value === null) {
@@ -110,11 +116,11 @@ program fin
 
       // 7. Run execution
       await execute(__env);
-      setOutput((prev) => prev + '\n[Process exited 0]');
+      setOutput((prev) => prev + '\n[Proceso terminado con código 0]');
 
     } catch (err: any) {
       if (err.message !== "Ejecución abortada") {
-        setOutput((prev) => prev + '\n[Internal Error]: ' + err.message);
+        setOutput((prev) => prev + '\n[Error Interno]: ' + err.message);
       }
     } finally {
       setIsRunning(false);
@@ -161,25 +167,25 @@ program fin
             <h1 className="text-2xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
               MiniTS IDE
             </h1>
-            <p className="text-xs text-zinc-400 font-medium tracking-wide uppercase">Educational Compiler Project</p>
+            <p className="text-xs text-zinc-400 font-medium tracking-wide uppercase">Proyecto de Compilador Educativo</p>
           </div>
         </div>
 
         <div className="flex items-center gap-4">
           <label className="clay-btn flex items-center gap-2 px-5 py-2.5 rounded-xl cursor-pointer text-sm font-semibold text-zinc-300">
             <Upload className="w-4 h-4" />
-            Load .mts
+            Cargar .mts
             <input type="file" accept=".mts,.txt" className="hidden" onChange={handleFileUpload} />
           </label>
           <button
             onClick={handleRun}
             className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold tracking-wide transition-all ${isRunning
-                ? 'bg-red-500/80 hover:bg-red-500 text-white shadow-[8px_8px_16px_#1a1a1c,-8px_-8px_16px_#343438]'
-                : 'clay-btn-primary'
+              ? 'bg-red-500/80 hover:bg-red-500 text-white shadow-[8px_8px_16px_#1a1a1c,-8px_-8px_16px_#343438]'
+              : 'clay-btn-primary'
               }`}
           >
             <Play className={`w-4 h-4 fill-current ${isRunning ? 'hidden' : ''}`} />
-            {isRunning ? "Running | Click to stop" : "Compile & Run"}
+            {isRunning ? "Ejecutando | Clic para detener" : "Compilar y Ejecutar"}
           </button>
         </div>
       </header>
@@ -215,35 +221,93 @@ program fin
           {/* Top Right: Lexicon / Target Code View */}
           <div className="clay-panel rounded-3xl flex-1 flex flex-col h-1/2">
             <div className="h-14 border-b border-black/20 flex items-center px-4 justify-between">
-              <div className="flex gap-2 h-full py-2">
+              <div className="flex gap-2 h-full py-2 overflow-x-auto">
                 <button
                   onClick={() => setActiveTab('js')}
-                  className={`px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all flex items-center gap-2 ${activeTab === 'js' ? 'bg-[#1f1f22] text-zinc-200 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  className={`px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'js' ? 'bg-[#1f1f22] text-zinc-200 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'}`}
                 >
-                  <Code2 className="w-4 h-4" /> Target JS
+                  <Code2 className="w-4 h-4 shrink-0" /> JS Destino
                 </button>
                 <button
                   onClick={() => setActiveTab('lexer')}
-                  className={`px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all flex items-center gap-2 ${activeTab === 'lexer' ? 'bg-[#1f1f22] text-zinc-200 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  className={`px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'lexer' ? 'bg-[#1f1f22] text-zinc-200 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'}`}
                 >
-                  <Type className="w-4 h-4" /> Lexicon
+                  <Type className="w-4 h-4 shrink-0" /> Léxico
+                </button>
+                <button
+                  onClick={() => setActiveTab('syntax')}
+                  className={`px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'syntax' ? 'bg-[#1f1f22] text-zinc-200 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'}`}
+                >
+                  <Code2 className="w-4 h-4 shrink-0" /> Sintaxis (AST)
+                </button>
+                <button
+                  onClick={() => setActiveTab('semantic')}
+                  className={`px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'semantic' ? 'bg-[#1f1f22] text-zinc-200 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'}`}
+                >
+                  <Type className="w-4 h-4 shrink-0" /> Semántica (Símbolos)
                 </button>
               </div>
             </div>
 
             <div className="flex-1 p-4 bg-[#1f1f22]/50 m-2 rounded-2xl overflow-auto clay-input border-0">
-              {activeTab === 'js' ? (
+              {activeTab === 'js' && (
                 <pre className="text-green-400/90 font-mono text-sm break-all whitespace-pre-wrap">{generatedJS}</pre>
-              ) : (
+              )}
+              {activeTab === 'lexer' && (
                 <div className="flex flex-col gap-1">
-                  {tokensList.length === 0 && <span className="text-zinc-500 italic text-sm font-mono">Run code to see tokens...</span>}
+                  {tokensList.length === 0 && <span className="text-zinc-500 italic text-sm font-mono">Ejecuta el código para ver los tokens...</span>}
                   {tokensList.map((tok, i) => (
                     <div key={i} className="flex font-mono text-sm border-b border-white/5 pb-1">
-                      <span className="w-12 text-zinc-500">[{tok.line}:{tok.column}]</span>
-                      <span className="w-32 text-indigo-400 font-semibold">{tok.type}</span>
+                      <span className="w-12 text-zinc-500 shrink-0">[{tok.line}:{tok.column}]</span>
+                      <span className="w-32 text-indigo-400 font-semibold shrink-0">{tok.type}</span>
                       <span className="text-zinc-300 truncate">'{tok.value}'</span>
                     </div>
                   ))}
+                </div>
+              )}
+              {activeTab === 'syntax' && (
+                <div className="flex flex-col gap-1">
+                  {!astData && <span className="text-zinc-500 italic text-sm font-mono">Ejecuta el código exitosamente para ver el AST...</span>}
+                  {astData && (
+                    <pre className="text-purple-400/90 font-mono text-xs break-all whitespace-pre-wrap">
+                      {JSON.stringify(astData, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              )}
+              {activeTab === 'semantic' && (
+                <div className="flex flex-col gap-1">
+                  {symbolTable.length === 0 && <span className="text-zinc-500 italic text-sm font-mono">No se encontraron variables o código no ejecutado...</span>}
+                  {symbolTable.length > 0 && (
+                    <div className="w-full">
+                      <table className="w-full text-left font-mono text-sm">
+                        <thead>
+                          <tr className="border-b border-white/10 text-zinc-400">
+                            <th className="py-2">Nombre</th>
+                            <th>Tipo</th>
+                            <th>Inicializada</th>
+                            <th>Uso (Veces)</th>
+                            <th>Ubicación</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-zinc-300">
+                          {symbolTable.map((sym, i) => (
+                            <tr key={i} className="border-b border-white/5">
+                              <td className="py-1 text-indigo-400 font-semibold">{sym.name}</td>
+                              <td className="text-amber-400">{sym.type}</td>
+                              <td>
+                                <span className={`px-2 py-0.5 rounded text-xs ${sym.isInitialized ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                  {sym.isInitialized ? 'Sí' : 'No'}
+                                </span>
+                              </td>
+                              <td>{sym.usageCount}</td>
+                              <td className="text-zinc-500">[{sym.line}:{sym.column}]</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -253,7 +317,7 @@ program fin
           <div className="clay-panel rounded-3xl flex-1 flex flex-col h-1/2 relative">
             <div className="h-14 border-b border-black/20 flex items-center px-6 justify-between">
               <span className="text-zinc-400 text-sm font-bold tracking-wider uppercase flex items-center gap-2">
-                <Terminal className="w-4 h-4" /> Execution Console
+                <Terminal className="w-4 h-4" /> Consola de Ejecución
               </span>
             </div>
             <div className="flex-1 flex flex-col p-4 text-zinc-300 font-mono text-sm m-2 rounded-2xl overflow-auto bg-[#1a1a1c] shadow-inner">
@@ -271,7 +335,7 @@ program fin
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
                     className="flex-1 bg-transparent border-none outline-none text-zinc-100 placeholder-zinc-600"
-                    placeholder="Type value and press Enter..."
+                    placeholder="Escribe el valor y presiona Enter..."
                   />
                 </form>
               )}
