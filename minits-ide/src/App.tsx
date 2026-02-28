@@ -2,8 +2,9 @@ import { useState, useRef } from 'react';
 import { Play, Upload, Code2, Terminal, Type } from 'lucide-react';
 import { tokenize, type Token } from './lib/lexer';
 import { parse } from './lib/parser';
+import { analyze } from './lib/analyzer';
 import { compileToJavaScript } from './lib/compiler';
-
+import type { CompilationError } from './lib/errors';
 // To avoid TS warnings on AsyncFunction
 const AsyncFunction = Object.getPrototypeOf(async function () { }).constructor;
 
@@ -31,29 +32,61 @@ program fin
 
   // Interactive console state
   const [isAwaitingInput, setIsAwaitingInput] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
   const [inputPrompt, setInputPrompt] = useState('');
   const [inputValue, setInputValue] = useState('');
 
-  const resolveInputRef = useRef<((value: string) => void) | null>(null);
+  const resolveInputRef = useRef<((value: string | null) => void) | null>(null);
 
   const handleRun = async () => {
+    if (isRunning) {
+      if (resolveInputRef.current) {
+        resolveInputRef.current(null); // Abort awaiting input
+        resolveInputRef.current = null;
+      }
+      setIsRunning(false);
+      setIsAwaitingInput(false);
+      setOutput((prev) => prev + '\n[Ejecución detenida por el usuario]');
+      return;
+    }
+
+    setIsRunning(true);
     setOutput('');
     setGeneratedJS('// Compiling...');
     setTokensList([]);
 
     try {
       // 1. Lexical Analysis
-      const tokens = tokenize(code);
-      setTokensList(tokens);
+      const lexResult = tokenize(code);
+      setTokensList(lexResult.tokens);
+      let allErrors: CompilationError[] = [...lexResult.errors];
 
       // 2. Syntactic Analysis & AST creation
-      const ast = parse(tokens);
+      const parseResult = parse(lexResult.tokens);
+      allErrors = allErrors.concat(parseResult.errors);
 
-      // 3. Code Generation
-      const jsCode = compileToJavaScript(ast);
+      // 3. Semantic Analysis (Linting)
+      if (parseResult.ast) {
+        const semanticErrors = analyze(parseResult.ast);
+        allErrors = allErrors.concat(semanticErrors);
+      }
+
+      // 4. Compilation halting
+      if (allErrors.length > 0) {
+        setGeneratedJS('// Compilation halted due to errors.');
+        const errorStrings = allErrors.map((e) =>
+          `[${e.source?.toUpperCase() || 'ERROR'} ERROR] Línea ${e.line}, Columna ${e.column}: ${e.message}`
+        );
+        setOutput(`Se encontraron ${allErrors.length} errores de compilación:\n\n` + errorStrings.join('\n'));
+        setIsRunning(false);
+        return;
+      }
+
+      // 5. Code Generation
+      const jsCode = compileToJavaScript(parseResult.ast!);
       setGeneratedJS(jsCode);
 
-      // 4. Execution setup
+      // 6. Execution setup
       const __env = {
         print: (val: any) => {
           setOutput((prev) => prev + String(val) + '\n');
@@ -61,20 +94,31 @@ program fin
         read: async (varName: string) => {
           setIsAwaitingInput(true);
           setInputPrompt(`Enter value for ${varName}: `);
-          return new Promise<string>((resolve) => {
-            resolveInputRef.current = resolve;
+          return new Promise<string>((resolve, reject) => {
+            resolveInputRef.current = (value: string | null) => {
+              if (value === null) {
+                reject(new Error("Ejecución abortada"));
+              } else {
+                resolve(value);
+              }
+            };
           });
         }
       };
 
       const execute = new AsyncFunction('__env', jsCode);
 
-      // 5. Run execution
+      // 7. Run execution
       await execute(__env);
       setOutput((prev) => prev + '\n[Process exited 0]');
 
     } catch (err: any) {
-      setOutput((prev) => prev + '\n[Error]: ' + err.message);
+      if (err.message !== "Ejecución abortada") {
+        setOutput((prev) => prev + '\n[Internal Error]: ' + err.message);
+      }
+    } finally {
+      setIsRunning(false);
+      setIsAwaitingInput(false);
     }
   };
 
@@ -129,11 +173,13 @@ program fin
           </label>
           <button
             onClick={handleRun}
-            className="clay-btn-primary flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold tracking-wide"
-            disabled={isAwaitingInput}
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold tracking-wide transition-all ${isRunning
+                ? 'bg-red-500/80 hover:bg-red-500 text-white shadow-[8px_8px_16px_#1a1a1c,-8px_-8px_16px_#343438]'
+                : 'clay-btn-primary'
+              }`}
           >
-            <Play className="w-4 h-4 fill-current" />
-            {isAwaitingInput ? "Running..." : "Compile & Run"}
+            <Play className={`w-4 h-4 fill-current ${isRunning ? 'hidden' : ''}`} />
+            {isRunning ? "Running | Click to stop" : "Compile & Run"}
           </button>
         </div>
       </header>

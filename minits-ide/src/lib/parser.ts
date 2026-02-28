@@ -1,4 +1,5 @@
 import { TokenType, type Token } from './lexer';
+import type { CompilationError } from './errors';
 
 export type ASTNode = Program | VarDecl | Statement | Expression;
 
@@ -12,6 +13,8 @@ export interface VarDecl {
     type: 'VarDecl';
     identifier: string;
     varType: string;
+    line: number;
+    column: number;
 }
 
 export type Statement = Assignment | Print | Read | IfStatement | WhileStatement | ForStatement | BlockStatement;
@@ -20,6 +23,8 @@ export interface Assignment {
     type: 'Assignment';
     identifier: string;
     value: Expression;
+    line: number;
+    column: number;
 }
 
 export interface Print {
@@ -30,6 +35,8 @@ export interface Print {
 export interface Read {
     type: 'Read';
     identifier: string;
+    line: number;
+    column: number;
 }
 
 export interface IfStatement {
@@ -47,7 +54,7 @@ export interface WhileStatement {
 
 export interface ForStatement {
     type: 'ForStatement';
-    init: Assignment | VarDecl; // MiniTS doc shows: for (let i: number = 0; ...)
+    init: Assignment | VarDecl;
     condition: Expression;
     update: Assignment;
     body: Statement[];
@@ -65,42 +72,72 @@ export interface BinaryExpr {
     left: Expression;
     operator: string;
     right: Expression;
+    line: number;
+    column: number;
 }
 
 export interface Literal {
     type: 'Literal';
     value: any;
     valueType: 'number' | 'string' | 'boolean';
+    line: number;
+    column: number;
 }
 
 export interface Identifier {
     type: 'Identifier';
     name: string;
+    line: number;
+    column: number;
 }
 
 export class ParserError extends Error {
     public token: Token;
     constructor(message: string, token: Token) {
-        super(`${message} at line ${token.line}, column ${token.column}`);
+        super(message);
         this.token = token;
     }
 }
 
-export function parse(tokens: Token[]): Program {
+export function parse(tokens: Token[]): { ast: Program | null; errors: CompilationError[] } {
     let current = 0;
+    const errors: CompilationError[] = [];
+
+    function reportError(message: string, token: Token) {
+        errors.push({
+            message,
+            line: token.line,
+            column: token.column,
+            source: 'parser'
+        });
+    }
 
     function peek(): Token {
+        if (current >= tokens.length) return tokens[tokens.length - 1];
         return tokens[current];
     }
 
-    function advance(): Token {
-        return tokens[current++];
+    function previous(): Token {
+        return tokens[current - 1];
     }
 
-    // unused matchType removed
+    function advance(): Token {
+        if (peek().type !== TokenType.EOF) current++;
+        return previous();
+    }
+
+    function checkType(type: TokenType): boolean {
+        if (peek().type === TokenType.EOF) return false;
+        return peek().type === type;
+    }
+
+    function checkValue(type: TokenType, value: string): boolean {
+        if (peek().type === TokenType.EOF) return false;
+        return peek().type === type && peek().value === value;
+    }
 
     function matchValue(type: TokenType, value: string): boolean {
-        if (peek().type === type && peek().value === value) {
+        if (checkValue(type, value)) {
             advance();
             return true;
         }
@@ -108,78 +145,146 @@ export function parse(tokens: Token[]): Program {
     }
 
     function expectValue(type: TokenType, value: string): Token {
+        if (checkValue(type, value)) return advance();
         const token = peek();
-        if (token.type === type && token.value === value) {
-            return advance();
-        }
-        throw new ParserError(`Expected '${value}' but found '${token.value}'`, token);
+        throw new ParserError(`Se esperaba '${value}' pero se encontró '${token.value}'`, token);
     }
 
     function expectType(type: TokenType): Token {
+        if (checkType(type)) return advance();
         const token = peek();
-        if (token.type === type) {
-            return advance();
-        }
-        throw new ParserError(`Expected token type ${type} but found ${token.type} (${token.value})`, token);
+        throw new ParserError(`Se esperaba tipo de token ${type} pero se encontró ${token.type} ('${token.value}')`, token);
     }
 
-    function parseProgram(): Program {
-        expectValue(TokenType.Keyword, 'program');
-        expectValue(TokenType.Keyword, 'inicio');
+    function synchronize() {
+        advance();
+        while (peek().type !== TokenType.EOF) {
+            if (previous().value === ';') return;
 
-        const vars = parseVars();
-        const body = parseMain();
+            switch (peek().value) {
+                case 'vars':
+                case 'main':
+                case 'let':
+                case 'if':
+                case 'while':
+                case 'for':
+                case 'print':
+                case 'read':
+                case 'program':
+                case 'inicio':
+                case 'fin':
+                    return;
+            }
+            advance();
+        }
+    }
 
-        expectValue(TokenType.Keyword, 'program');
-        expectValue(TokenType.Keyword, 'fin');
+    function parseProgram(): Program | null {
+        try {
+            expectValue(TokenType.Keyword, 'program');
+            expectValue(TokenType.Keyword, 'inicio');
 
-        return { type: 'Program', vars, body };
+            const vars = parseVars();
+            const body = parseMain();
+
+            expectValue(TokenType.Keyword, 'program');
+            expectValue(TokenType.Keyword, 'fin');
+
+            return { type: 'Program', vars, body };
+        } catch (e: any) {
+            if (e instanceof ParserError) {
+                reportError(e.message, e.token);
+                // Cannot easily recover top-level structure, but we try
+            } else {
+                reportError(`Error inesperado: ${e.message}`, peek());
+            }
+            return null;
+        }
     }
 
     function parseVars(): VarDecl[] {
         const declarations: VarDecl[] = [];
         if (matchValue(TokenType.Keyword, 'vars')) {
-            expectValue(TokenType.Punctuation, '{');
-            while (peek().type !== TokenType.Punctuation || peek().value !== '}') {
-                declarations.push(parseVarDecl());
+            try {
+                expectValue(TokenType.Punctuation, '{');
+            } catch (e: any) {
+                if (e instanceof ParserError) reportError(e.message, e.token);
             }
-            expectValue(TokenType.Punctuation, '}');
+
+            while (!checkValue(TokenType.Punctuation, '}') && !checkType(TokenType.EOF) && !checkValue(TokenType.Keyword, 'main')) {
+                try {
+                    declarations.push(parseVarDecl());
+                } catch (e: any) {
+                    if (e instanceof ParserError) {
+                        reportError(e.message, e.token);
+                        synchronize();
+                    } else throw e;
+                }
+            }
+
+            try {
+                expectValue(TokenType.Punctuation, '}');
+            } catch (e: any) {
+                if (e instanceof ParserError) reportError(e.message, e.token);
+            }
         }
         return declarations;
     }
 
     function parseVarDecl(): VarDecl {
-        expectValue(TokenType.Keyword, 'let');
-        const id = expectType(TokenType.Identifier).value;
+        const letToken = expectValue(TokenType.Keyword, 'let');
+        const idToken = expectType(TokenType.Identifier);
         expectValue(TokenType.Punctuation, ':');
-        const varType = expectType(TokenType.Keyword).value;
-        if (!['number', 'string', 'boolean'].includes(varType)) {
-            throw new ParserError(`Unknown variable type '${varType}'`, tokens[current - 1]);
+        const varTypeToken = expectType(TokenType.Keyword);
+
+        if (!['number', 'string', 'boolean'].includes(varTypeToken.value)) {
+            throw new ParserError(`Tipo de variable desconocido '${varTypeToken.value}'`, varTypeToken);
         }
 
-        // Some loops declare vars with assignment directly like "let i: number = 0;"
-        // For standard vars block, it should end with ;
         if (matchValue(TokenType.Operator, '=')) {
-            // In vars block, assignment is not standard per doc, but let's just consume it if needed
-            parseExpression(); // evaluate, but throw away in vars basically
+            parseExpression();
         }
         expectValue(TokenType.Punctuation, ';');
-        return { type: 'VarDecl', identifier: id, varType };
+        return {
+            type: 'VarDecl',
+            identifier: idToken.value,
+            varType: varTypeToken.value,
+            line: letToken.line,
+            column: letToken.column
+        };
     }
 
     function parseMain(): Statement[] {
         let statements: Statement[] = [];
         if (matchValue(TokenType.Keyword, 'main')) {
-            expectValue(TokenType.Punctuation, '{');
-            while (peek().type !== TokenType.Punctuation || peek().value !== '}') {
-                statements.push(parseStatement());
+            try {
+                expectValue(TokenType.Punctuation, '{');
+            } catch (e: any) {
+                if (e instanceof ParserError) reportError(e.message, e.token);
             }
-            expectValue(TokenType.Punctuation, '}');
+
+            while (!checkValue(TokenType.Punctuation, '}') && !checkValue(TokenType.Keyword, 'program') && !checkType(TokenType.EOF)) {
+                try {
+                    const stmt = parseStatement();
+                    if (stmt) statements.push(stmt);
+                } catch (e: any) {
+                    if (e instanceof ParserError) {
+                        reportError(e.message, e.token);
+                        synchronize();
+                    } else throw e;
+                }
+            }
+
+            try {
+                expectValue(TokenType.Punctuation, '}');
+            } catch (e: any) {
+                if (e instanceof ParserError) reportError(e.message, e.token);
+            }
         }
         return statements;
     }
 
-    function parseStatement(): Statement {
+    function parseStatement(): Statement | null {
         const token = peek();
 
         if (token.type === TokenType.Keyword) {
@@ -189,16 +294,37 @@ export function parse(tokens: Token[]): Program {
             if (token.value === 'while') return parseWhile();
             if (token.value === 'for') return parseFor();
             if (token.value === 'let') {
-                // Some blocks might allow local var decls, specially in For loop init, but standard shows it in vars. We'll handle For loop specifically.
-                throw new ParserError(`Unexpected var declaration outside variables block`, token);
+                throw new ParserError(`Declaración de variable 'let' fuera del bloque 'vars'`, token);
             }
         }
 
         if (token.type === TokenType.Identifier) {
+            // Provide a better error message if the user tried to call an unknown function (like rea(...) instead of read)
+            if (current + 1 < tokens.length && tokens[current + 1].value === '(') {
+                throw new ParserError(`Llamada a función desconocida o variable usada como función: '${token.value}'`, token);
+            }
             return parseAssignment();
         }
 
-        throw new ParserError(`Unexpected statement starting with '${token.value}'`, token);
+        throw new ParserError(`Instrucción inesperada comenzando con '${token.value}'`, token);
+    }
+
+    function parseBlock(): Statement[] {
+        expectValue(TokenType.Punctuation, '{');
+        const stmts: Statement[] = [];
+        while (!checkValue(TokenType.Punctuation, '}') && !checkType(TokenType.EOF)) {
+            try {
+                const stmt = parseStatement();
+                if (stmt) stmts.push(stmt);
+            } catch (e: any) {
+                if (e instanceof ParserError) {
+                    reportError(e.message, e.token);
+                    synchronize();
+                } else throw e;
+            }
+        }
+        expectValue(TokenType.Punctuation, '}');
+        return stmts;
     }
 
     function parsePrint(): Print {
@@ -211,24 +337,34 @@ export function parse(tokens: Token[]): Program {
     }
 
     function parseRead(): Read {
-        expectValue(TokenType.Keyword, 'read');
+        const readToken = expectValue(TokenType.Keyword, 'read');
         expectValue(TokenType.Punctuation, '(');
-        const id = expectType(TokenType.Identifier).value;
+        const idToken = expectType(TokenType.Identifier);
         expectValue(TokenType.Punctuation, ')');
         expectValue(TokenType.Punctuation, ';');
-        return { type: 'Read', identifier: id };
+        return {
+            type: 'Read',
+            identifier: idToken.value,
+            line: readToken.line,
+            column: readToken.column
+        };
     }
 
     function parseAssignment(): Assignment {
-        const id = expectType(TokenType.Identifier).value;
+        const idToken = expectType(TokenType.Identifier);
         expectValue(TokenType.Operator, '=');
         const value = parseExpression();
-        // Allow assignments without trailing semicolon specifically for For-loop update
-        // We check if it is part of a for loop or normal statement
+
         if (peek().value === ';') {
             expectValue(TokenType.Punctuation, ';');
         }
-        return { type: 'Assignment', identifier: id, value };
+        return {
+            type: 'Assignment',
+            identifier: idToken.value,
+            value,
+            line: idToken.line,
+            column: idToken.column
+        };
     }
 
     function parseIf(): IfStatement {
@@ -237,17 +373,11 @@ export function parse(tokens: Token[]): Program {
         const condition = parseExpression();
         expectValue(TokenType.Punctuation, ')');
 
-        expectValue(TokenType.Punctuation, '{');
-        const thenBranch: Statement[] = [];
-        while (peek().value !== '}') thenBranch.push(parseStatement());
-        expectValue(TokenType.Punctuation, '}');
+        const thenBranch = parseBlock();
 
         let elseBranch: Statement[] | undefined;
         if (matchValue(TokenType.Keyword, 'else')) {
-            expectValue(TokenType.Punctuation, '{');
-            elseBranch = [];
-            while (peek().value !== '}') elseBranch.push(parseStatement());
-            expectValue(TokenType.Punctuation, '}');
+            elseBranch = parseBlock();
         }
 
         return { type: 'IfStatement', condition, thenBranch, elseBranch };
@@ -259,10 +389,7 @@ export function parse(tokens: Token[]): Program {
         const condition = parseExpression();
         expectValue(TokenType.Punctuation, ')');
 
-        expectValue(TokenType.Punctuation, '{');
-        const body: Statement[] = [];
-        while (peek().value !== '}') body.push(parseStatement());
-        expectValue(TokenType.Punctuation, '}');
+        const body = parseBlock();
 
         return { type: 'WhileStatement', condition, body };
     }
@@ -271,17 +398,23 @@ export function parse(tokens: Token[]): Program {
         expectValue(TokenType.Keyword, 'for');
         expectValue(TokenType.Punctuation, '(');
 
-        // Init (could be Let or Assignment)
+        // Init (let or assignment)
         let init: VarDecl | Assignment;
         if (peek().value === 'let') {
-            expectValue(TokenType.Keyword, 'let');
-            const id = expectType(TokenType.Identifier).value;
+            const letToken = expectValue(TokenType.Keyword, 'let');
+            const idToken = expectType(TokenType.Identifier);
             expectValue(TokenType.Punctuation, ':');
-            const varType = expectType(TokenType.Keyword).value;
+            const varTypeToken = expectType(TokenType.Keyword);
             expectValue(TokenType.Operator, '=');
-            parseExpression(); // Initial value
+            parseExpression();
             expectValue(TokenType.Punctuation, ';');
-            init = { type: 'VarDecl', identifier: id, varType }; // Ignore the value for simplicity since target translates to let JS
+            init = {
+                type: 'VarDecl',
+                identifier: idToken.value,
+                varType: varTypeToken.value,
+                line: letToken.line,
+                column: letToken.column
+            };
         } else {
             init = parseAssignment();
         }
@@ -289,13 +422,10 @@ export function parse(tokens: Token[]): Program {
         const condition = parseExpression();
         expectValue(TokenType.Punctuation, ';');
 
-        const update = parseAssignment(); // won't consume semicolon because of logic in parseAssignment
+        const update = parseAssignment();
         expectValue(TokenType.Punctuation, ')');
 
-        expectValue(TokenType.Punctuation, '{');
-        const body: Statement[] = [];
-        while (peek().value !== '}') body.push(parseStatement());
-        expectValue(TokenType.Punctuation, '}');
+        const body = parseBlock();
 
         return { type: 'ForStatement', init, condition, update, body };
     }
@@ -308,9 +438,16 @@ export function parse(tokens: Token[]): Program {
         let left = parseTerm();
 
         while (['<', '>', '<=', '>=', '==', '!='].includes(peek().value)) {
-            const operator = advance().value;
+            const opToken = advance();
             const right = parseTerm();
-            left = { type: 'BinaryExpr', left, operator, right };
+            left = {
+                type: 'BinaryExpr',
+                left,
+                operator: opToken.value,
+                right,
+                line: opToken.line,
+                column: opToken.column
+            };
         }
 
         return left;
@@ -320,9 +457,16 @@ export function parse(tokens: Token[]): Program {
         let left = parseFactor();
 
         while (['+', '-'].includes(peek().value)) {
-            const operator = advance().value;
+            const opToken = advance();
             const right = parseFactor();
-            left = { type: 'BinaryExpr', left, operator, right };
+            left = {
+                type: 'BinaryExpr',
+                left,
+                operator: opToken.value,
+                right,
+                line: opToken.line,
+                column: opToken.column
+            };
         }
 
         return left;
@@ -332,37 +476,50 @@ export function parse(tokens: Token[]): Program {
         let left = parsePrimary();
 
         while (['*', '/'].includes(peek().value)) {
-            const operator = advance().value;
+            const opToken = advance();
             const right = parsePrimary();
-            left = { type: 'BinaryExpr', left, operator, right };
+            left = {
+                type: 'BinaryExpr',
+                left,
+                operator: opToken.value,
+                right,
+                line: opToken.line,
+                column: opToken.column
+            };
         }
 
         return left;
     }
 
     function parsePrimary(): Expression {
-        const token = advance();
+        const token = peek();
 
         if (token.type === TokenType.NumberLiteral) {
-            return { type: 'Literal', value: parseFloat(token.value), valueType: 'number' };
+            advance();
+            return { type: 'Literal', value: parseFloat(token.value), valueType: 'number', line: token.line, column: token.column };
         }
         if (token.type === TokenType.StringLiteral) {
-            return { type: 'Literal', value: token.value, valueType: 'string' };
+            advance();
+            return { type: 'Literal', value: token.value, valueType: 'string', line: token.line, column: token.column };
         }
         if (token.type === TokenType.BooleanLiteral) {
-            return { type: 'Literal', value: token.value === 'true', valueType: 'boolean' };
+            advance();
+            return { type: 'Literal', value: token.value === 'true', valueType: 'boolean', line: token.line, column: token.column };
         }
         if (token.type === TokenType.Identifier) {
-            return { type: 'Identifier', name: token.value };
+            advance();
+            return { type: 'Identifier', name: token.value, line: token.line, column: token.column };
         }
         if (token.type === TokenType.Punctuation && token.value === '(') {
+            advance();
             const expr = parseExpression();
             expectValue(TokenType.Punctuation, ')');
             return expr;
         }
 
-        throw new ParserError(`Unexpected token in expression: ${token.value}`, token);
+        throw new ParserError(`Token inesperado en expresión: '${token.value}'`, token);
     }
 
-    return parseProgram();
+    const ast = parseProgram();
+    return { ast, errors };
 }

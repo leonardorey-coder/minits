@@ -18,6 +18,8 @@ export interface Token {
     column: number;
 }
 
+import type { CompilationError } from './errors';
+
 const KEYWORDS = new Set([
     'program', 'inicio', 'fin', 'vars', 'main',
     'let', 'number', 'string', 'boolean',
@@ -26,8 +28,9 @@ const KEYWORDS = new Set([
 
 const BOOLEANS = new Set(['true', 'false']);
 
-export function tokenize(sourceCode: string): Token[] {
+export function tokenize(sourceCode: string): { tokens: Token[], errors: CompilationError[] } {
     const tokens: Token[] = [];
+    const errors: CompilationError[] = [];
     let current = 0;
     let line = 1;
     let column = 1;
@@ -134,9 +137,16 @@ export function tokenize(sourceCode: string): Token[] {
         }
 
         // Unknown char
-        throw new Error(`Unexpected character '${char}' at line ${line}, column ${column}`);
+        errors.push({
+            message: `Unexpected character '${char}'`,
+            line,
+            column,
+            source: 'lexer'
+        });
+        current++;
+        column++;
     }
 
     tokens.push({ type: TokenType.EOF, value: '', line, column });
-    return tokens;
+    return { tokens, errors };
 }
