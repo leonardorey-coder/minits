@@ -139,10 +139,13 @@ export function analyze(ast: Program): { errors: CompilationError[]; symbols: Sy
                     if (expr.operator === '+') {
                         if (leftType === 'string' && rightType === 'string') return 'string';
                         if (leftType === 'number' && rightType === 'number') return 'number';
+                        // Allow string + number or number + string (concatenation)
+                        if ((leftType === 'string' && rightType === 'number') ||
+                            (leftType === 'number' && rightType === 'string')) return 'string';
                         if (leftType && rightType) {
-                            reportSemanticError(`El operador '+' solo soporta operandos del mismo tipo (number o string), se encontraron '${leftType}' y '${rightType}'`, expr.line, expr.column);
+                            reportSemanticError(`El operador '+' no soporta operandos de tipo '${leftType}' y '${rightType}'`, expr.line, expr.column);
                         }
-                        return null; // Return null on type mismatch
+                        return null;
                     }
 
                     if (leftType !== 'number' || rightType !== 'number') {

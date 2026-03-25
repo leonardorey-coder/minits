@@ -315,9 +315,15 @@ export function parse(tokens: Token[]): { ast: Program | null; errors: Compilati
     }
 
     function parseBlock(): Statement[] {
-        expectValue(TokenType.Punctuation, '{');
+        if (!matchValue(TokenType.Punctuation, '{')) {
+            reportError(`Se esperaba '{' para abrir el bloque, pero se encontró '${peek().value}'`, peek());
+        }
         const stmts: Statement[] = [];
-        while (!checkValue(TokenType.Punctuation, '}') && !checkType(TokenType.EOF)) {
+        while (
+            !checkValue(TokenType.Punctuation, '}') &&
+            !checkType(TokenType.EOF) &&
+            !checkValue(TokenType.Keyword, 'program')
+        ) {
             try {
                 const stmt = parseStatement();
                 if (stmt) stmts.push(stmt);
@@ -328,7 +334,9 @@ export function parse(tokens: Token[]): { ast: Program | null; errors: Compilati
                 } else throw e;
             }
         }
-        expectValue(TokenType.Punctuation, '}');
+        if (!matchValue(TokenType.Punctuation, '}')) {
+            reportError(`Se esperaba '}' para cerrar el bloque, pero se encontró '${peek().value}'`, peek());
+        }
         return stmts;
     }
 
@@ -382,7 +390,15 @@ export function parse(tokens: Token[]): { ast: Program | null; errors: Compilati
         expectValue(TokenType.Keyword, 'if');
         expectValue(TokenType.Punctuation, '(');
         const condition = parseExpression();
-        expectValue(TokenType.Punctuation, ')');
+
+        if (!matchValue(TokenType.Punctuation, ')')) {
+            const tk = peek();
+            reportError(`Se esperaba ')' para cerrar la condición del 'if', pero se encontró '${tk.value}'`, tk);
+            while (!checkValue(TokenType.Punctuation, ')') && !checkValue(TokenType.Punctuation, '{') && !checkType(TokenType.EOF)) {
+                advance();
+            }
+            matchValue(TokenType.Punctuation, ')');
+        }
 
         const thenBranch = parseBlock();
 
@@ -398,7 +414,16 @@ export function parse(tokens: Token[]): { ast: Program | null; errors: Compilati
         expectValue(TokenType.Keyword, 'while');
         expectValue(TokenType.Punctuation, '(');
         const condition = parseExpression();
-        expectValue(TokenType.Punctuation, ')');
+
+        if (!matchValue(TokenType.Punctuation, ')')) {
+            const tk = peek();
+            reportError(`Se esperaba ')' para cerrar la condición del 'while', pero se encontró '${tk.value}'`, tk);
+            // Avanza hasta ')' o '{' para poder seguir parseando el cuerpo
+            while (!checkValue(TokenType.Punctuation, ')') && !checkValue(TokenType.Punctuation, '{') && !checkType(TokenType.EOF)) {
+                advance();
+            }
+            matchValue(TokenType.Punctuation, ')');
+        }
 
         const body = parseBlock();
 
